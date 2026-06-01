@@ -8,9 +8,10 @@ import io.netty.buffer.Unpooled;
 import net.jpountz.lz4.LZ4Compressor;
 import net.jpountz.lz4.LZ4Factory;
 import net.jpountz.lz4.LZ4FastDecompressor;
+import net.minecraft.client.Minecraft;
+import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
-import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
@@ -35,7 +36,7 @@ import java.util.stream.Collectors;
 
 public class EmiStackCache {
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final int CACHE_VERSION = 2;
+    private static final int CACHE_VERSION = 4;
     private static final int MAGIC = 0x454D4943; // "EMIC"
 
     private static final LZ4Factory LZ4 = LZ4Factory.safeInstance();
@@ -161,9 +162,17 @@ public class EmiStackCache {
                                 continue;
 
                             if (entry.nbt() != null) {
-                                ItemStack.CODEC.parse(NbtOps.INSTANCE, entry.nbt())
-                                        .result()
-                                        .ifPresent(stack -> builtStacks.add(EmiStack.of(stack)));
+                                RegistryAccess registry = getRegistryAccess();
+                                if (registry != null) {
+                                    ItemStack parsed = ItemStack.parse(registry, entry.nbt()).orElse(null);
+                                    if (parsed != null && !parsed.isEmpty()) {
+                                        builtStacks.add(EmiStack.of(parsed));
+                                    } else {
+                                        builtStacks.add(EmiStack.of(item));
+                                    }
+                                } else {
+                                    builtStacks.add(EmiStack.of(item));
+                                }
                             } else {
                                 builtStacks.add(EmiStack.of(item));
                             }
@@ -186,7 +195,14 @@ public class EmiStackCache {
                 EmiStackList.stacks = builtStacks;
                 cacheUsed = true;
                 lastLoadTime = System.currentTimeMillis() - start;
-                LOGGER.debug("EMI cache loaded {} stacks in {}ms (binary format)", builtStacks.size(), lastLoadTime);
+                LOGGER.info("[EMI加速] Cache loaded {} stacks in {}ms", builtStacks.size(), lastLoadTime);
+                long itemCount = builtStacks.stream().filter(s -> s.getKey() instanceof Item).count();
+                long fluidCount = builtStacks.stream().filter(s -> s.getKey() instanceof Fluid).count();
+                LOGGER.info("[EMI加速] Cache breakdown: {} items, {} fluids", itemCount, fluidCount);
+                if (!builtStacks.isEmpty()) {
+                    EmiStack first = builtStacks.get(0);
+                    LOGGER.info("[EMI加速] First cached stack: type={}, id={}", first.getKey().getClass().getName(), first.getId());
+                }
                 return true;
             } finally {
                 buf.release();
@@ -215,7 +231,11 @@ public class EmiStackCache {
 
     private static void save() {
         List<EmiStack> stacks = EmiStackList.stacks;
-        if (stacks == null || stacks.isEmpty()) return;
+        if (stacks == null || stacks.isEmpty()) {
+            LOGGER.info("[EMI加速] Save skipped: stacks is null or empty");
+            return;
+        }
+        LOGGER.info("[EMI加速] Save start: {} stacks in list", stacks.size());
 
         var cacheFile = getCacheFile();
         try {
@@ -234,11 +254,12 @@ public class EmiStackCache {
                     CompoundTag nbt = null;
                     var changes = stack.getComponentChanges();
                     if (changes != null && !changes.isEmpty()) {
-                        ItemStack itemStack = stack.getItemStack();
-                        Tag tag = ItemStack.CODEC.encodeStart(NbtOps.INSTANCE, itemStack)
-                                .result().orElse(null);
-                        if (tag instanceof CompoundTag ct) {
-                            nbt = ct;
+                        RegistryAccess registry = getRegistryAccess();
+                        if (registry != null) {
+                            Tag tag = stack.getItemStack().save(registry);
+                            if (tag instanceof CompoundTag ct) {
+                                nbt = ct;
+                            }
                         }
                     }
                     entries.add(new CacheEntry(TYPE_ITEM, id, nbt));
@@ -281,11 +302,19 @@ public class EmiStackCache {
             System.arraycopy(compressedBuf, 0, output, 8, compressedLen);
 
             Files.write(cacheFile, output);
+            LOGGER.info("[EMI加速] Cache saved: {} entries, {} bytes ({} compressed)", entries.size(), payload.length, compressedLen);
         } catch (Exception e) {
             LOGGER.error("Failed to write cache file", e);
         } finally {
             payloadBuf.release();
         }
+    }
+
+    @Nullable
+    private static RegistryAccess getRegistryAccess() {
+        var mc = Minecraft.getInstance();
+        if (mc.level == null) return null;
+        return mc.level.registryAccess();
     }
 
     private static void cleanOldJsonCache() {

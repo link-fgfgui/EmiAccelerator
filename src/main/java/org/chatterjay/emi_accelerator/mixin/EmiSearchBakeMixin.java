@@ -1,9 +1,11 @@
 package org.chatterjay.emi_accelerator.mixin;
 
+import com.mojang.logging.LogUtils;
 import dev.emi.emi.search.EmiSearch;
 import net.minecraft.client.searchtree.SuffixArray;
 import org.chatterjay.emi_accelerator.config.ModConfig;
 import org.chatterjay.emi_accelerator.util.EmiSearchDeferrer;
+import org.slf4j.Logger;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
@@ -12,6 +14,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(value = EmiSearch.class, remap = false)
 public class EmiSearchBakeMixin {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     @Shadow
     private static SuffixArray names;
@@ -25,7 +29,9 @@ public class EmiSearchBakeMixin {
     @Inject(method = "bake", at = @At("HEAD"), cancellable = true)
     private static void onBake(CallbackInfo ci) {
         if (!ModConfig.isAccelerationEnabled()) return;
+
         if (ModConfig.isDeferredSearchEnabled() && EmiSearchDeferrer.consumePending()) {
+            LOGGER.info("[EMI加速] EmiSearch.bake() deferring to background thread");
             names = new SuffixArray();
             tooltips = new SuffixArray();
             mods = new SuffixArray();
