@@ -27,11 +27,14 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.Collectors;
 
 public class EmiStackCache {
@@ -68,6 +71,11 @@ public class EmiStackCache {
 
     private static volatile boolean cacheUsed = false;
     private static volatile long lastLoadTime = 0;
+    private static final ExecutorService SAVE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "EMI Accelerator Cache Save");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     private static Path getCacheFile() {
         return ModConfig.getConfigDir().resolve("stack-cache.emic");
@@ -220,13 +228,32 @@ public class EmiStackCache {
         if (!ModConfig.isCacheEnabled()) return;
         if (cacheUsed) return;
 
-        CompletableFuture.runAsync(() -> {
+        try {
+            SAVE_EXECUTOR.execute(() -> {
+                try {
+                    save();
+                } catch (Exception e) {
+                    LOGGER.error("Failed to save EMI cache", e);
+                }
+            });
+        } catch (RejectedExecutionException e) {
+            LOGGER.error("Failed to queue EMI cache save", e);
+        }
+    }
+
+    private static void writeAtomically(Path cacheFile, byte[] output) throws IOException {
+        Path tempFile = cacheFile.resolveSibling(cacheFile.getFileName() + ".tmp");
+        Files.write(tempFile, output);
+        try {
+            Files.move(tempFile, cacheFile, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
             try {
-                save();
-            } catch (Exception e) {
-                LOGGER.error("Failed to save EMI cache", e);
+                Files.move(tempFile, cacheFile, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException fallback) {
+                e.addSuppressed(fallback);
+                throw e;
             }
-        });
+        }
     }
 
     private static void save() {
@@ -301,7 +328,7 @@ public class EmiStackCache {
             output[7] = (byte) payload.length;
             System.arraycopy(compressedBuf, 0, output, 8, compressedLen);
 
-            Files.write(cacheFile, output);
+            writeAtomically(cacheFile, output);
             LOGGER.info("[EMI加速] Cache saved: {} entries, {} bytes ({} compressed)", entries.size(), payload.length, compressedLen);
         } catch (Exception e) {
             LOGGER.error("Failed to write cache file", e);

@@ -11,7 +11,8 @@
     "EmiSearchMixin",
     "EmiReloadLogMixin",
     "EmiPlayerInventoryMixin",
-    "EmiSearchBakeMixin"
+    "EmiSearchBakeMixin",
+    "MinecraftMixin"
   ],
   "injectors": {
     "defaultRequire": 1

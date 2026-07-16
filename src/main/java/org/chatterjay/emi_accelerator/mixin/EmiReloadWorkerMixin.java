@@ -21,6 +21,7 @@ public class EmiReloadWorkerMixin {
     @Inject(method = "run", at = @At("HEAD"))
     private void onRunHead(CallbackInfo ci) {
         if (!ModConfig.isAccelerationEnabled()) return;
+        EmiSearchDeferrer.beginReload();
         LOGGER.info("[EMI加速] ReloadWorker.run() starting, deferredSearch={}, cacheEnabled={}",
                 ModConfig.isDeferredSearchEnabled(), ModConfig.isCacheEnabled());
         ReloadTimer.startReload();
@@ -119,31 +120,35 @@ public class EmiReloadWorkerMixin {
     private void onRunReturn(CallbackInfo ci) {
         if (!ModConfig.isAccelerationEnabled()) return;
 
-        ReloadTimer.checkpoint("run_return");
+        try {
+            ReloadTimer.checkpoint("run_return");
 
-        boolean cacheHit = EmiStackCache.wasCacheUsed();
-        ReloadTimer.finishReload(cacheHit);
-        long totalTime = ReloadTimer.getLastReloadDuration();
+            boolean cacheHit = EmiStackCache.wasCacheUsed();
+            ReloadTimer.finishReload(cacheHit);
+            long totalTime = ReloadTimer.getLastReloadDuration();
 
-        LOGGER.info("[EMI加速] ReloadWorker.run() RETURN: cacheHit={}, totalTime={}ms, deferrerRunning={}, cacheFileExists={}",
-                cacheHit, totalTime, EmiSearchDeferrer.isRunning(), EmiStackCache.cacheFileExists());
+            LOGGER.info("[EMI加速] ReloadWorker.run() RETURN: cacheHit={}, totalTime={}ms, deferrerRunning={}, cacheFileExists={}",
+                    cacheHit, totalTime, EmiSearchDeferrer.isRunning(), EmiStackCache.cacheFileExists());
 
-        if (!cacheHit && !EmiStackCache.cacheFileExists()) {
-            LOGGER.info("[EMI加速] ReloadWorker: no cache file and not a cache hit, skipping completion message");
-            return;
+            if (!cacheHit && !EmiStackCache.cacheFileExists()) {
+                LOGGER.info("[EMI加速] ReloadWorker: no cache file and not a cache hit, skipping completion message");
+                return;
+            }
+
+            Component msg = cacheHit
+                    ? Component.translatable("emi_accelerator.reload.complete_cached", totalTime)
+                    : Component.translatable("emi_accelerator.reload.complete_uncached", totalTime);
+
+            if (ModConfig.isDeferredSearchEnabled() && EmiSearchDeferrer.isRunning()) {
+                msg = Component.literal("").append(msg)
+                        .append(Component.translatable("emi_accelerator.reload.building_suffix"));
+                LOGGER.info("[EMI加速] ReloadWorker: deferred search still running, appending suffix message");
+            }
+
+            ChatHelper.sendIfNotHidden(msg);
+            LOGGER.info("[EMI加速] ReloadWorker: completion message sent");
+        } finally {
+            EmiSearchDeferrer.endReload();
         }
-
-        Component msg = cacheHit
-                ? Component.translatable("emi_accelerator.reload.complete_cached", totalTime)
-                : Component.translatable("emi_accelerator.reload.complete_uncached", totalTime);
-
-        if (ModConfig.isDeferredSearchEnabled() && EmiSearchDeferrer.isRunning()) {
-            msg = Component.literal("").append(msg)
-                    .append(Component.translatable("emi_accelerator.reload.building_suffix"));
-            LOGGER.info("[EMI加速] ReloadWorker: deferred search still running, appending suffix message");
-        }
-
-        ChatHelper.sendIfNotHidden(msg);
-        LOGGER.info("[EMI加速] ReloadWorker: completion message sent");
     }
 }
