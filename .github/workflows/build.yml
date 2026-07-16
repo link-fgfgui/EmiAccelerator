@@ -26,7 +26,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build
-        run: ./gradlew build
+        run: |
+          for attempt in 1 2 3; do
+            echo "Gradle build attempt ${attempt}/3"
+            if ./gradlew build --no-daemon --no-configuration-cache --refresh-dependencies; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -56,7 +64,15 @@ jobs:
         run: chmod +x gradlew
 
       - name: Build Release
-        run: ./gradlew build
+        run: |
+          for attempt in 1 2 3; do
+            echo "Gradle release build attempt ${attempt}/3"
+            if ./gradlew build --no-daemon --no-configuration-cache --refresh-dependencies; then
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          exit 1
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
